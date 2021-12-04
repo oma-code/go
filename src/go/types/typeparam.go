@@ -69,7 +69,7 @@ func (t *TypeParam) Constraint() Type {
 		if n, _ := t.bound.(*Named); n != nil {
 			pos = n.obj.pos
 		}
-		computeTypeSet(t.check, pos, iface)
+		computeInterfaceTypeSet(t.check, pos, iface)
 	}
 	return t.bound
 }
@@ -77,10 +77,51 @@ func (t *TypeParam) Constraint() Type {
 // SetConstraint sets the type constraint for t.
 func (t *TypeParam) SetConstraint(bound Type) {
 	if bound == nil {
-		panic("types2.TypeParam.SetConstraint: bound must not be nil")
+		panic("nil constraint")
 	}
 	t.bound = bound
 }
+
+func (t *TypeParam) Underlying() Type { return t }
+func (t *TypeParam) String() string   { return TypeString(t, nil) }
+
+// TParamList holds a list of type parameters bound to a type.
+type TParamList struct{ tparams []*TypeName }
+
+// Len returns the number of type parameters in the list.
+// It is safe to call on a nil receiver.
+func (tps *TParamList) Len() int {
+	return len(tps.list())
+}
+
+// At returns the i'th type parameter in the list.
+func (tps *TParamList) At(i int) *TypeName {
+	return tps.list()[i]
+}
+
+func (tps *TParamList) list() []*TypeName {
+	if tps == nil {
+		return nil
+	}
+	return tps.tparams
+}
+
+func bindTParams(list []*TypeName) *TParamList {
+	if len(list) == 0 {
+		return nil
+	}
+	for i, tp := range list {
+		typ := tp.Type().(*TypeParam)
+		if typ.index >= 0 {
+			panic("type parameter bound more than once")
+		}
+		typ.index = i
+	}
+	return &TParamList{tparams: list}
+}
+
+// ----------------------------------------------------------------------------
+// Implementation
 
 // iface returns the constraint interface of t.
 func (t *TypeParam) iface() *Interface {
@@ -90,46 +131,14 @@ func (t *TypeParam) iface() *Interface {
 	return &emptyInterface
 }
 
-func (t *TypeParam) Underlying() Type { return t }
-func (t *TypeParam) String() string   { return TypeString(t, nil) }
-
-// TypeParams holds a list of type parameters bound to a type.
-type TypeParams struct{ tparams []*TypeName }
-
-// Len returns the number of type parameters in the list.
-// It is safe to call on a nil receiver.
-func (tps *TypeParams) Len() int {
-	return len(tps.list())
+// structuralType returns the structural type of the type parameter's constraint; or nil.
+func (t *TypeParam) structuralType() Type {
+	return t.iface().typeSet().structuralType()
 }
 
-// At returns the i'th type parameter in the list.
-func (tps *TypeParams) At(i int) *TypeName {
-	return tps.list()[i]
+func (t *TypeParam) is(f func(*term) bool) bool {
+	return t.iface().typeSet().is(f)
 }
-
-func (tps *TypeParams) list() []*TypeName {
-	if tps == nil {
-		return nil
-	}
-	return tps.tparams
-}
-
-func bindTParams(list []*TypeName) *TypeParams {
-	if len(list) == 0 {
-		return nil
-	}
-	for i, tp := range list {
-		typ := tp.Type().(*TypeParam)
-		if typ.index >= 0 {
-			panic("internal error: type parameter bound more than once")
-		}
-		typ.index = i
-	}
-	return &TypeParams{tparams: list}
-}
-
-// ----------------------------------------------------------------------------
-// Implementation
 
 func (t *TypeParam) underIs(f func(Type) bool) bool {
 	return t.iface().typeSet().underIs(f)

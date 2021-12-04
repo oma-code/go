@@ -25,20 +25,7 @@ type Interface struct {
 }
 
 // typeSet returns the type set for interface t.
-func (t *Interface) typeSet() *_TypeSet { return computeTypeSet(nil, token.NoPos, t) }
-
-// is reports whether interface t represents types that all satisfy f.
-func (t *Interface) is(f func(Type, bool) bool) bool {
-	switch t := t.typeSet().types.(type) {
-	case nil, *top:
-		// TODO(gri) should settle on top or nil to represent this case
-		return false // we must have at least one type! (was bug)
-	case *Union:
-		return t.is(func(t *term) bool { return f(t.typ, t.tilde) })
-	default:
-		return f(t, false)
-	}
-}
+func (t *Interface) typeSet() *_TypeSet { return computeInterfaceTypeSet(nil, token.NoPos, t) }
 
 // emptyInterface represents the empty (completed) interface
 var emptyInterface = Interface{complete: true, tset: &topTypeSet}
@@ -56,9 +43,12 @@ func NewInterface(methods []*Func, embeddeds []*Named) *Interface {
 	return NewInterfaceType(methods, tnames)
 }
 
-// NewInterfaceType returns a new interface for the given methods and embedded types.
-// NewInterfaceType takes ownership of the provided methods and may modify their types
-// by setting missing receivers.
+// NewInterfaceType returns a new interface for the given methods and embedded
+// types. NewInterfaceType takes ownership of the provided methods and may
+// modify their types by setting missing receivers.
+//
+// To avoid race conditions, the interface's type set should be computed before
+// concurrent use of the interface, by explicitly calling Complete.
 func NewInterfaceType(methods []*Func, embeddeds []Type) *Interface {
 	if len(methods) == 0 && len(embeddeds) == 0 {
 		return &emptyInterface
@@ -109,7 +99,7 @@ func (t *Interface) NumMethods() int { return t.typeSet().NumMethods() }
 func (t *Interface) Method(i int) *Func { return t.typeSet().Method(i) }
 
 // Empty reports whether t is the empty interface.
-func (t *Interface) Empty() bool { return t.typeSet().IsTop() }
+func (t *Interface) Empty() bool { return t.typeSet().IsAll() }
 
 // IsComparable reports whether each type in interface t's type set is comparable.
 func (t *Interface) IsComparable() bool { return t.typeSet().IsComparable() }
@@ -117,39 +107,18 @@ func (t *Interface) IsComparable() bool { return t.typeSet().IsComparable() }
 // IsConstraint reports whether interface t is not just a method set.
 func (t *Interface) IsConstraint() bool { return !t.typeSet().IsMethodSet() }
 
-// isSatisfiedBy reports whether interface t's type list is satisfied by the type typ.
-// If the type list is empty (absent), typ trivially satisfies the interface.
-// TODO(gri) This is not a great name. Eventually, we should have a more comprehensive
-//           "implements" predicate.
-func (t *Interface) isSatisfiedBy(typ Type) bool {
-	t.Complete()
-	switch t := t.typeSet().types.(type) {
-	case nil:
-		return true // no type restrictions
-	case *Union:
-		r, _ := t.intersect(typ, false)
-		return r != nil
-	default:
-		return Identical(t, typ)
-	}
-}
-
 // Complete computes the interface's type set. It must be called by users of
 // NewInterfaceType and NewInterface after the interface's embedded types are
 // fully defined and before using the interface type in any way other than to
 // form other types. The interface must not contain duplicate methods or a
 // panic occurs. Complete returns the receiver.
 //
-// Deprecated: Type sets are now computed lazily, on demand; this function
-//             is only here for backward-compatibility. It does not have to
-//             be called explicitly anymore.
+// Interface types that have been completed are safe for concurrent use.
 func (t *Interface) Complete() *Interface {
-	// Some tests are still depending on the state change
-	// (string representation of an Interface not containing an
-	// /* incomplete */ marker) caused by the explicit Complete
-	// call, so we compute the type set eagerly here.
-	t.complete = true
-	t.typeSet()
+	if !t.complete {
+		t.complete = true
+	}
+	t.typeSet() // checks if t.tset is already set
 	return t
 }
 
@@ -268,7 +237,7 @@ func (check *Checker) interfaceType(ityp *Interface, iface *ast.InterfaceType, d
 	// Compute type set with a non-nil *Checker as soon as possible
 	// to report any errors. Subsequent uses of type sets will use
 	// this computed type set and won't need to pass in a *Checker.
-	check.later(func() { computeTypeSet(check, iface.Pos(), ityp) })
+	check.later(func() { computeInterfaceTypeSet(check, iface.Pos(), ityp) })
 }
 
 func flattenUnion(list []ast.Expr, x ast.Expr) []ast.Expr {

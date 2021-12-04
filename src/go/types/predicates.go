@@ -140,10 +140,6 @@ func (p *ifacePair) identical(q *ifacePair) bool {
 
 // For changes to this code the corresponding changes should be made to unifier.nify.
 func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
-	// types must be expanded for comparison
-	x = expand(x)
-	y = expand(y)
-
 	if x == y {
 		return true
 	}
@@ -229,16 +225,6 @@ func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
 				identical(x.results, y.results, cmpTags, p)
 		}
 
-	case *Union:
-		// Two union types are identical if they contain the same terms.
-		// The set (list) of types in a union type consists of unique
-		// types - each type appears exactly once. Thus, two union types
-		// must contain the same number of types to have chance of
-		// being equal.
-		if y, ok := y.(*Union); ok {
-			return identicalTerms(x.terms, y.terms)
-		}
-
 	case *Interface:
 		// Two interface types are identical if they describe the same type sets.
 		// With the existing implementation restriction, this simplifies to:
@@ -250,7 +236,7 @@ func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
 		if y, ok := y.(*Interface); ok {
 			xset := x.typeSet()
 			yset := y.typeSet()
-			if !Identical(xset.types, yset.types) {
+			if !xset.terms.equal(yset.terms) {
 				return false
 			}
 			a := xset.methods
@@ -316,6 +302,32 @@ func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
 		// Two named types are identical if their type names originate
 		// in the same type declaration.
 		if y, ok := y.(*Named); ok {
+			x.expand(nil)
+			y.expand(nil)
+
+			// xargs := x.TArgs()
+			// yargs := y.TArgs()
+
+			if x.NumTArgs() != y.NumTArgs() {
+				return false
+			}
+
+			if nargs := x.NumTArgs(); nargs > 0 {
+				// Instances are identical if their original type and type arguments
+				// are identical.
+				if !Identical(x.orig, y.orig) {
+					return false
+				}
+				for i := 0; i < nargs; i++ {
+					xa := x.TArg(i)
+					ya := y.TArg(i)
+					if !Identical(xa, ya) {
+						return false
+					}
+				}
+				return true
+			}
+
 			// TODO(gri) Why is x == y not sufficient? And if it is,
 			//           we can just return false here because x == y
 			//           is caught in the very beginning of this function.

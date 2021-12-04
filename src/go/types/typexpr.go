@@ -145,19 +145,18 @@ func (check *Checker) varType(e ast.Expr) Type {
 // ordinaryType reports an error if typ is an interface type containing
 // type lists or is (or embeds) the predeclared type comparable.
 func (check *Checker) ordinaryType(pos positioner, typ Type) {
-	// We don't want to call under() (via asInterface) or complete interfaces
-	// while we are in the middle of type-checking parameter declarations that
-	// might belong to interface methods. Delay this check to the end of
-	// type-checking.
+	// We don't want to call under() (via asInterface) or complete interfaces while we
+	// are in the middle of type-checking parameter declarations that might belong to
+	// interface methods. Delay this check to the end of type-checking.
 	check.later(func() {
 		if t := asInterface(typ); t != nil {
-			tset := computeTypeSet(check, pos.Pos(), t) // TODO(gri) is this the correct position?
-			if tset.types != nil {
-				check.softErrorf(pos, _Todo, "interface contains type constraints (%s)", tset.types)
-				return
-			}
-			if tset.IsComparable() {
-				check.softErrorf(pos, _Todo, "interface is (or embeds) comparable")
+			tset := computeInterfaceTypeSet(check, pos.Pos(), t) // TODO(gri) is this the correct position?
+			if !tset.IsMethodSet() {
+				if tset.comparable {
+					check.softErrorf(pos, _Todo, "interface is (or embeds) comparable")
+				} else {
+					check.softErrorf(pos, _Todo, "interface contains type constraints")
+				}
 			}
 		}
 	})
@@ -224,7 +223,7 @@ func (check *Checker) typInternal(e0 ast.Expr, def *Named) (T Type) {
 				// Test case: type T[P any] *T[P]
 				// TODO(gri) investigate if that's a bug or to be expected
 				// (see also analogous comment in Checker.instantiate).
-				under = T.Underlying()
+				under = safeUnderlying(T)
 			}
 			if T == under {
 				check.trace(e0.Pos(), "=> %s // %s", T, goTypeName(T))
@@ -412,9 +411,13 @@ func (check *Checker) typeOrNil(e ast.Expr) Type {
 }
 
 func (check *Checker) instantiatedType(x ast.Expr, targsx []ast.Expr, def *Named) Type {
-	base := check.genericType(x, true)
-	if base == Typ[Invalid] {
-		return base // error already reported
+	gtyp := check.genericType(x, true)
+	if gtyp == Typ[Invalid] {
+		return gtyp // error already reported
+	}
+	base, _ := gtyp.(*Named)
+	if base == nil {
+		panic(fmt.Sprintf("%v: cannot instantiate %v", x.Pos(), gtyp))
 	}
 
 	// evaluate arguments
@@ -430,14 +433,13 @@ func (check *Checker) instantiatedType(x ast.Expr, targsx []ast.Expr, def *Named
 		posList[i] = arg.Pos()
 	}
 
-	typ := check.InstantiateLazy(x.Pos(), base, targs, posList, true)
+	typ := check.instantiateLazy(x.Pos(), base, targs, posList, true)
 	def.setUnderlying(typ)
 
 	// make sure we check instantiation works at least once
 	// and that the resulting type is valid
 	check.later(func() {
-		t := expand(typ)
-		check.validType(t, nil)
+		check.validType(typ, nil)
 	})
 
 	return typ
